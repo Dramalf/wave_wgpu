@@ -11,15 +11,306 @@
             background-color: black;
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
 </head>
 
 <body id="wasm-example">
-  <script type="module">
-      import init from "./pkg/tutorial1_window.js";
-      init().then(() => {
-          console.log("WASM Loaded");
-      });
-  </script>
+    <canvas id="gpuCanvas" width="800" height="600"></canvas>
+    <script type="module">
+        //   import init from "./pkg/tutorial1_window.js";
+        //   init().then(() => {
+        //       console.log("WASM Loaded");
+        //   });
+    </script>
+    <script>
+        const GRID_WIDTH = 100;
+        const GRID_HEIGHT = 100;
+        const numFrames = 100;
+        const fullData = new Float32Array(numFrames * GRID_HEIGHT * GRID_WIDTH);
+        let offset=0;
+        function saveFrameAsBin(frame, buffer) {
+            fullData.set(buffer, offset);
+            offset += buffer.length;
+            console.log(buffer)
+            if (frame === numFrames - 1) {
+                const blob = new Blob([fullData.buffer], { type: "application/octet-stream" });
+                saveAs(blob, "all_frames.bin");
+            }
+
+        }
+
+        async function init() {
+            if (!navigator.gpu) {
+                throw Error("WebGPU not supported.");
+            }
+
+            const adapter = await navigator.gpu.requestAdapter();
+            if (!adapter) {
+                throw Error("Couldn't request WebGPU adapter.");
+            }
+
+            const device = await adapter.requestDevice();
+
+
+            const BUFFER_SIZE = GRID_WIDTH * GRID_HEIGHT * 4;
+
+            const shader = `
+struct Params {
+frame:u32,
+    tx: u32,
+    ty: u32,
+};
+
+@group(0) @binding(0)
+var<storage, read_write> alpha: array<f32>;
+
+@group(1) @binding(0)
+var<storage, read_write> u_prev: array<f32>;
+@group(1) @binding(1)
+var<storage, read_write> u_curr: array<f32>;
+@group(1) @binding(2)
+var<storage, read_write> u_next: array<f32>;
+@group(1) @binding(3)
+var<uniform> params: Params;
+
+const PI: f32 = 3.141592653589793;
+
+fn curr_v( x: u32, y: u32) -> f32 {
+    if(x<${GRID_WIDTH}u&&x>=0u&&y<${GRID_WIDTH}u&&y>=0u){
+        let index = x * ${GRID_WIDTH} + y;
+
+        return u_curr[index];
+    }
+    return 0f;
+}
+fn prev_v( x: u32, y: u32) -> f32 {
+    if(x<${GRID_WIDTH}u&&x>=0u&&y<${GRID_WIDTH}u&&y>=0u){
+        let index = x * ${GRID_WIDTH} + y;
+
+        return u_prev[index];
+    }
+    return 0f;
+}
+fn next_v( x: u32, y: u32) -> f32 {
+    if(x<${GRID_WIDTH}u&&x>=0u&&y<${GRID_WIDTH}u&&y>=0u){
+        let index = x * ${GRID_WIDTH} + y;
+
+        return u_next[index];
+    }
+    return 0f;
+}
+fn alp_v( x: u32, y: u32) -> f32 {
+    if(x<${GRID_WIDTH}u&&x>=0u&&y<${GRID_WIDTH}u&&y>=0u){
+        let index = x * ${GRID_WIDTH} + y;
+
+        return alpha[index];
+    }
+    return 0f;
+}
+@compute @workgroup_size(1)
+fn main(
+  @builtin(global_invocation_id)
+  global_id : vec3u,
+
+) {
+let x=global_id.x/${GRID_WIDTH};
+let y=global_id.x%${GRID_WIDTH};
+let frame=f32(params.frame);
+let tx=params.tx;
+let ty=params.ty;
+
+if(global_id.x==tx*${GRID_WIDTH}+ty){
+let v=10f*sin(2f*PI*frame/8f);
+
+u_curr[global_id.x] = v;
+u_prev[global_id.x] = v;
+}
+
+  u_next[global_id.x] = 
+   alp_v(x,y) * (
+    curr_v(x-1u,y) +
+    curr_v(x+1u,y) +
+    curr_v(x,y-1u) +
+    curr_v(x,y+1u) -
+    curr_v(x,y) * 4.0
+  ) + 2.0 * curr_v(x,y) - prev_v(x,y);
+
+    
+}
+`;
+            const shaderModule = device.createShaderModule({
+                code: shader,
+            });
+
+            let u_prev = device.createBuffer({
+                size: BUFFER_SIZE,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            });
+            let u_curr = device.createBuffer({
+                size: BUFFER_SIZE,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            });
+            let u_next = device.createBuffer({
+                size: BUFFER_SIZE,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            });
+            const alpha = device.createBuffer({
+                size: BUFFER_SIZE,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
+            });
+            {
+                const alphaGrid = new Float32Array(new Array(GRID_WIDTH * GRID_HEIGHT).fill(0.29*0.29));
+                
+                device.queue.writeBuffer(alpha, 0, alphaGrid);
+            }
+            const stagingBuffer = device.createBuffer({
+                size: BUFFER_SIZE,
+                usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+            });
+            const bindGroupLayout0 = device.createBindGroupLayout({
+                entries: [
+                    {
+                        binding: 0,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: {
+                            type: "storage",
+                        },
+                    }
+                ],
+            });
+            const bindGroupLayout1 = device.createBindGroupLayout({
+                entries: [
+                    {
+                        binding: 0,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: {
+                            type: "storage",
+                        },
+                    },
+                    {
+                        binding: 1,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: {
+                            type: "storage",
+                        },
+                    },
+                    {
+                        binding: 2,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: {
+                            type: "storage",
+                        },
+                    },
+                    {
+                        binding: 3,
+                        visibility: GPUShaderStage.COMPUTE,
+                        buffer: {
+                            type: "uniform",
+                        },
+                    },
+                ],
+            });
+            const paramData = new Uint32Array([0, 5, 5]);
+
+            const paramBuffer = device.createBuffer({
+                size: paramData.byteLength,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+            });
+            const computePipeline = device.createComputePipeline({
+                layout: device.createPipelineLayout({
+                    bindGroupLayouts: [bindGroupLayout0, bindGroupLayout1],
+                }),
+                compute: {
+                    module: shaderModule,
+                    entryPoint: "main",
+                },
+            });
+            const bindGroup0 = device.createBindGroup({
+                layout: bindGroupLayout0,
+                entries: [
+                    {
+                        binding: 0,
+                        resource: {
+                            buffer: alpha,
+                        },
+                    }
+                ],
+            });
+
+            for (let frame = 0; frame < numFrames; frame++) {
+                paramData[0] = frame;
+                device.queue.writeBuffer(paramBuffer, 0, paramData);
+
+                const bindGroup1 = device.createBindGroup({
+                    layout: bindGroupLayout1,
+                    entries: [
+                        {
+                            binding: 0,
+                            resource: {
+                                buffer: u_prev,
+                            },
+                        },
+                        {
+                            binding: 1,
+                            resource: {
+                                buffer: u_curr,
+                            },
+                        },
+                        {
+                            binding: 2,
+                            resource: {
+                                buffer: u_next,
+                            },
+                        },
+                        {
+                            binding: 3,
+                            resource: {
+                                buffer: paramBuffer,
+                            },
+                        }
+                    ],
+                });
+
+                const commandEncoder = device.createCommandEncoder();
+                const passEncoder = commandEncoder.beginComputePass();
+                passEncoder.setPipeline(computePipeline);
+                passEncoder.setBindGroup(0, bindGroup0);
+
+                passEncoder.setBindGroup(1, bindGroup1);
+                passEncoder.dispatchWorkgroups(GRID_WIDTH * GRID_HEIGHT);
+
+                passEncoder.end();
+                // 复制 output 缓冲去到 staging 缓冲区
+                commandEncoder.copyBufferToBuffer(
+                    u_curr,
+                    0, // 来源缓冲区偏移量
+                    stagingBuffer,
+                    0, // 目的缓冲区偏移量
+                    BUFFER_SIZE,
+                );
+
+                // 通过将命令缓冲区数组传递给命令队列以执行来结束
+                device.queue.submit([commandEncoder.finish()]);
+                // 映射 staging 缓冲区，以便读回到 JS
+                await stagingBuffer.mapAsync(
+                    GPUMapMode.READ,
+                    0, // 偏移量
+                    BUFFER_SIZE, // 长度
+                );
+
+                const copyArrayBuffer = stagingBuffer.getMappedRange(0, BUFFER_SIZE);
+                const data = copyArrayBuffer.slice();
+                stagingBuffer.unmap();
+                saveFrameAsBin(frame, new Float32Array(data));
+                let tmp = u_prev;
+                u_prev = u_curr;
+                u_curr = u_next;
+                u_next = tmp;
+            }
+        }
+        init()
+    </script>
 </body>
 
 </html>
