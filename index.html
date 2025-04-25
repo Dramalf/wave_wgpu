@@ -18,12 +18,17 @@
 <body id="wasm-example">
     <canvas id="gpuCanvas" width="800" height="600"></canvas>
     <script type="module">
-        //   import init from "./pkg/tutorial1_window.js";
-        //   init().then(() => {
-        //       console.log("WASM Loaded");
-        //   });
+          import init,{run} from "./pkg/tutorial1_window.js";
+          console.log(run,'run')
+          init().then((wasmInstance) => {
+              console.log("WASM Loaded");
+              console.log(wasmInstance.memory)
+              window.WASM_MEMORY=wasmInstance.memory
+            run();
+          });
     </script>
-    <script>
+    <script type="text">
+        
         const GRID_WIDTH = 100;
         const GRID_HEIGHT = 100;
         const numFrames = 100;

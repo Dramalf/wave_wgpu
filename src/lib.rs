@@ -4,6 +4,10 @@ use wgpu::util::DeviceExt;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+use netcdf::{create, Extent, Extents};
+
+
 const GRID_WIDTH: u32 = 40;
 const GRID_HEIGHT: u32 = 40;
 const NUM_FRAMES: u32 = 100;
@@ -14,9 +18,26 @@ struct WaveParams {
     tx: u32,
     ty: u32,
 }
+#[cfg(not(target_arch = "wasm32"))]
+fn create_nc_file()->netcdf::FileMut {
+    let mut file: netcdf::FileMut = create("output_rs.nc").unwrap();
+    file.add_dimension("y", GRID_WIDTH as usize).unwrap();
+    file.add_dimension("x", GRID_HEIGHT as usize).unwrap();
+    file.add_unlimited_dimension("frame").unwrap();
+    file
+}
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
-pub async fn run() {
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen(module = "/saveFrameToBin.js")]
+extern "C" {
+    #[wasm_bindgen(js_name = "saveFrameToBin")]
+    fn js_save_frame_to_bin(offset: usize, size: usize);
+}
+
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub async fn run(){
+    
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
             std::panic::set_hook(Box::new(console_error_panic_hook::hook));
@@ -25,13 +46,17 @@ pub async fn run() {
             env_logger::init();
         }
     }
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        #[cfg(not(target_arch = "wasm32"))]
-        backends: wgpu::Backends::PRIMARY,
-        #[cfg(target_arch = "wasm32")]
-        backends: wgpu::Backends::GL,
-        ..Default::default()
-    });
+    #[cfg(target_arch = "wasm32")]
+    let mut full_frames_data:Vec<f32> = vec![0.0;(NUM_FRAMES  * GRID_WIDTH * GRID_HEIGHT )as usize];
+    
+    #[cfg(target_arch = "wasm32")]
+    let mut frame_buffer_offset:usize=0;
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut nc_file = create_nc_file();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut data_var = nc_file.add_variable::<f64>("data", &["frame", "y", "x"]).unwrap(); 
+
+    let instance = wgpu::Instance::default();
 
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -76,7 +101,7 @@ pub async fn run() {
     for y in 0..GRID_WIDTH {
         for x in 0..GRID_WIDTH {
             let idx = (y * GRID_WIDTH + x) as usize;
-            alpha_data[idx] = 0.29*0.29 ;
+            alpha_data[idx] = 0.29 * 0.29;
         }
     }
     let alpha_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -87,7 +112,7 @@ pub async fn run() {
             | wgpu::BufferUsages::COPY_SRC,
     });
     let mut wave_params = WaveParams {
-        frame:  0.0f32,
+        frame: 0.0f32,
         tx: 5,
         ty: 5,
     };
@@ -185,6 +210,7 @@ pub async fn run() {
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
+    log::info!("123");
     for frame in 0..NUM_FRAMES {
         wave_params.frame = frame as f32;
 
@@ -223,27 +249,47 @@ pub async fn run() {
             cpass.set_bind_group(0, &bind_group_0, &[]);
             cpass.set_bind_group(1, &bind_group_1, &[]);
             cpass.dispatch_workgroups(GRID_WIDTH * GRID_HEIGHT, 1, 1);
-
         }
-        encoder.copy_buffer_to_buffer(
-            &u_curr,
-            0,
-            &staging_buffer,
-            0,
-            u_curr.size(),
-        );
-    
+        encoder.copy_buffer_to_buffer(&u_curr, 0, &staging_buffer, 0, u_curr.size());
+
         queue.submit(Some(encoder.finish()));
         let buffer_slice = staging_buffer.slice(..);
         let (sender, receiver) = flume::bounded(1);
         buffer_slice.map_async(wgpu::MapMode::Read, move |r| sender.send(r).unwrap());
         device.poll(wgpu::PollType::wait()).unwrap();
         receiver.recv_async().await.unwrap().unwrap();
-        println!("Result received.");
         {
-            let view = buffer_slice.get_mapped_range();
+            let view: wgpu::BufferView<'_> = buffer_slice.get_mapped_range();
             let data: &[f32] = bytemuck::cast_slice(&view);
-            println!("Result: {:?}", &data);
+            #[cfg(target_arch = "wasm32")]
+            {
+                full_frames_data[frame_buffer_offset ..frame_buffer_offset + grid_size as usize]
+                    .copy_from_slice(data);
+                frame_buffer_offset += grid_size as usize;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                
+                let extents: Extents = [
+                Extent::SliceCount {
+                    start: frame as usize,
+                    count: 1,
+                    stride: 1,
+                },
+                Extent::SliceCount {
+                    start: 0,
+                    count: GRID_WIDTH as usize,
+                    stride: 1,
+                },
+                Extent::SliceCount {
+                    start: 0,
+                    count: GRID_HEIGHT  as usize,
+                    stride: 1,
+                },
+            ]
+            .into();
+            data_var.put_values(&data, extents).unwrap();
+            }
         }
         staging_buffer.unmap();
         let tmp = u_prev;
@@ -251,4 +297,7 @@ pub async fn run() {
         u_curr = u_next;
         u_next = tmp;
     }
+#[cfg(target_arch = "wasm32")]
+
+    js_save_frame_to_bin(full_frames_data.as_ptr() as usize,full_frames_data.len());
 }
