@@ -66,7 +66,7 @@ This project serves as an excellent self-study resource to learn about `wgpu`, W
 
     * Set up a local web server to serve the project files (e.g., using `python -m http.server` or `npx http-server`).
     * Access `http://localhost:8000/index.html` in your web browser.
-    * This will generate `allFrames.bin`.
+    * This will generate `all_frames.bin`.
     * Use the provided `nc.ipynb` Jupyter Notebook to convert `allFrames.bin` to `output_wasm.nc`.
     * View the output using `ncview`:
 
