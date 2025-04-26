@@ -58,7 +58,7 @@ This project serves as an excellent self-study resource to learn about `wgpu`, W
 
 3.  **Web Browser Execution (WebAssembly):**
 
-    * Build the project for WebAssembly (you might need to configure your Rust toolchain for the `wasm32-unknown-unknown` target):
+    * Build the project for WebAssembly:
 
         ```bash
          wasm-pack build --target web 
