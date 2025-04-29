@@ -5,9 +5,7 @@
    <img src="demo.gif" width="300" height="300">
 </div>
 
-This project is a Rust-based implementation for simulating and visualizing wave phenomena using the `wgpu` graphics library. `wgpu` enables portable GPU computation and rendering, making it suitable for creating interactive and visually appealing wave simulations.
-
-This project serves as an excellent self-study resource to learn about `wgpu`, WebAssembly (`wasm`), and compute shaders.
+This project is a Rust-based implementation for simulating and visualizing wave phenomena using the `wgpu` graphics library. It is a good project to learn about `wgpu`, WebAssembly (`wasm`), and compute shaders.
 
 **Key Features:**
 
